@@ -1,3 +1,6 @@
+### NDL note
+SpliSER_v0_1_8_pysam.py uses pysam rather than samtools and is faster.
+
 <img src="Images/SpliSER.png" width="200">
 Splice-site Strength Estimation using RNA-seq
 
