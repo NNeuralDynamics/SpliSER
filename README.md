@@ -1,6 +1,7 @@
 ### NDL note
 - SpliSER_v0_1_8_pysam.py uses pysam rather than samtools and is faster.
-- There is an unresolved bug when using --beta2Cryptic option. Using this flag will result in duplicate splice sites from same sample (12/17/24)
+- Duplicate sites can be produced from the same BAM file although rare. Recommedned to only keep the site with the higher alpha count.
+- There is an unresolved bug when using --beta2Cryptic option. Using this flag will result in more duplicate splice sites from same sample (12/17/24)
 
 <img src="Images/SpliSER.png" width="200">
 Splice-site Strength Estimation using RNA-seq
