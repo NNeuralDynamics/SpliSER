@@ -425,12 +425,12 @@ def checkBam(bedFile, sSite, sample, isStranded, strandedType):
 	#, stderr=subprocess.DEVNULL)
 	 #--threads ', str(threads),' ', #Can Multithread, why not?
 	#bamstream = bamview.stdout
-  bamstream = bedFile.fetch(str(sSite.getChromosome()), targetPos, int(targetPos) + 1)
+  	bamstream = bedFile.fetch(str(sSite.getChromosome()), targetPos, int(targetPos) + 1)
 
 	for line in bamstream:#get the reads one by one
 		#dline = line.decode('ascii')
 		#values = str(dline).split('\t')
-    values = line.to_string().split('\t')
+    		values = line.to_string().split('\t')
 		cPos = -1
 
 
