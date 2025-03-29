@@ -1,7 +1,11 @@
-### NDL note
+### NDL notes
 - SpliSER_v0_1_8_pysam.py uses pysam rather than samtools and is faster.
-- Duplicate sites can be produced from the same BAM file although rare. Recommedned to only keep the site with the higher alpha count.
-- There is an unresolved bug when using --beta2Cryptic option. Using this flag will result in more duplicate splice sites from same sample (12/17/24)
+- Duplicate sites can be produced from the same BAM file although rare. Recommened to only keep the site with the higher alpha count. This is due to the nature of RNA sequencing itself not code.
+##### Additional functions
+- `combine` original implementaiont requires all bam files to be accesed indivudally and is generally very slow due to recurrent opening and closing of BAM files.
+- `collectSites` has been added to make a master list of sites found in all BAMs.
+- `fillSample` takes this master list of sites as input along with a given samples spliser bed file and BAM file. The sites from the master list (i.e., sites in other samples) will be added to to this spliser bed file with the associated beta reads (if any). 
+
 
 <img src="Images/SpliSER.png" width="200">
 Splice-site Strength Estimation using RNA-seq
