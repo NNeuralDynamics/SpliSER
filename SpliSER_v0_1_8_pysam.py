@@ -10,6 +10,7 @@ import subprocess
 import argparse
 import HTSeq
 import pysam
+import csv
 from tqdm import tqdm
 import re
 from operator import truediv
@@ -425,12 +426,12 @@ def checkBam(bedFile, sSite, sample, isStranded, strandedType):
 	#, stderr=subprocess.DEVNULL)
 	 #--threads ', str(threads),' ', #Can Multithread, why not?
 	#bamstream = bamview.stdout
-  	bamstream = bedFile.fetch(str(sSite.getChromosome()), targetPos, int(targetPos) + 1)
+	bamstream = bedFile.fetch(str(sSite.getChromosome()), targetPos, int(targetPos) + 1)
 
 	for line in bamstream:#get the reads one by one
 		#dline = line.decode('ascii')
 		#values = str(dline).split('\t')
-    		values = line.to_string().split('\t')
+		values = line.to_string().split('\t')
 		cPos = -1
 
 
@@ -747,6 +748,162 @@ def outputCombinedLines(outTSV, site, gene,isbeta2Cryptic):
 			outTSV.write("NA\t")
 		outTSV.write(str(site.getPartnerCount(idx))+"\t")
 		outTSV.write(str(site.getCompetitorPos())+"\n")
+
+
+
+
+
+from tqdm import tqdm
+import ast
+
+def collectSites(samplesFile, outputPath):
+    """
+    Read each sample’s processed .SpliSER.tsv (column‑2 of samplesFile),
+    extract every unique (chrom, pos, strand), determine the site type,
+    merge classifications according to the rules, sort them, and write to outputPath
+    with a header: Region, Site, Strand, SiteType.
+    """
+    # Dictionary to store sites: key=(chrom, pos, strand), value=set of classifications.
+    site_dict = {}
+
+    # Define the order in which we want to output the classifications.
+    classification_order = ["exon_end", "exon_start", "both", "unknown"]
+
+    def classify_site(pos, partners_str):
+        """
+        Classify a splice site given its position and Partners string.
+        Returns one of:
+          - "both": if both upstream and downstream partners exist.
+          - "exon_end": if only downstream partners exist.
+          - "exon_start": if only upstream partners exist.
+          - "unknown": if no partners can be determined.
+        """
+        if not partners_str or partners_str.strip() == "":
+            return "unknown"
+        try:
+            partners_dict = ast.literal_eval(partners_str)
+        except Exception:
+            return "unknown"
+
+        if not isinstance(partners_dict, dict):
+            return "unknown"
+
+        try:
+            partners = [int(key) for key in partners_dict.keys()]
+        except Exception:
+            partners = []
+
+        upstream = [p for p in partners if p < pos]
+        downstream = [p for p in partners if p > pos]
+
+        if upstream and downstream:
+            return "both"
+        elif downstream:
+            return "exon_end"
+        elif upstream:
+            return "exon_start"
+        else:
+            return "unknown"
+
+    # Read all lines from samplesFile so that we know the total count.
+    with open(samplesFile) as samples:
+        sample_lines = samples.readlines()
+
+    # Process each sample file listed in samplesFile using tqdm with a known total.
+    for line in tqdm(sample_lines, desc="Processing sample files", total=len(sample_lines)):
+        parts = line.rstrip().split("\t")
+        if len(parts) < 3:
+            continue  # Skip lines without enough columns.
+        name, processed, bam = parts[0], parts[1], parts[2]
+        
+        # Read all lines from the processed file so we know the total count.
+        with open(processed) as proc_file:
+            proc_lines = proc_file.readlines()
+        
+        # Process each line of the processed file with tqdm
+        for row in tqdm(proc_lines, desc=f"Processing {processed}", leave=False, total=len(proc_lines)):
+            cols = row.rstrip().split("\t")
+            if cols[0] == "Region":
+                continue  # Skip header.
+            chrom = cols[0]
+            try:
+                pos = int(cols[1])
+            except ValueError:
+                continue
+            strand = cols[2]
+            # Assume Partners is at index 10 (adjust if needed).
+            partners_str = cols[10] if len(cols) > 10 else ""
+            new_class = classify_site(pos, partners_str)
+            key = (chrom, pos, strand)
+
+            if key not in site_dict:
+                site_dict[key] = set()
+            # If a new classification is not "unknown", remove "unknown" if it exists.
+            if new_class != "unknown" and "unknown" in site_dict[key]:
+                site_dict[key].remove("unknown")
+            site_dict[key].add(new_class)
+
+    # Sort sites by chrom, pos, then strand.
+    sorted_sites = sorted(site_dict.items(), key=lambda x: (x[0][0], x[0][1], x[0][2]))
+
+    # Write the output file with a new SiteType column.
+    with open(outputPath, "w") as out:
+        out.write("Region\tSite\tStrand\tSiteType\n")
+        for (chrom, pos, strand), class_set in sorted_sites:
+            # Sort the classifications according to our defined order.
+            sorted_classifications = sorted(class_set, key=lambda x: classification_order.index(x))
+            site_type = ",".join(sorted_classifications)
+            out.write(f"{chrom}\t{pos}\t{strand}\t{site_type}\n")
+
+
+
+
+
+def fillSample(masterPath, processedPath, bamPath, outputPath, isStranded, strandedType, isbeta2Cryptic):
+    """
+    For a single sample: load master site list, copy existing counts from processedPath,
+    fill missing sites by calling checkBam + calculateSSE on bamPath, and write complete TSV.
+    """
+    # Load master list: each row is (chrom, pos, strand, type)
+    master = [(c, int(p), s) for c, p, s, t in csv.reader(open(masterPath), delimiter="\t") if c != "Region"]
+    
+    # Load existing sample data into a dict keyed by (chrom, pos, strand)
+    existing = {}
+    for row in csv.reader(open(processedPath), delimiter="\t"):
+        if row[0] == "Region":
+            continue
+        existing[(row[0], int(row[1]), row[2])] = row
+
+    # Open the BAM file using pysam
+    bam = pysam.Samfile(bamPath)
+    
+    with open(outputPath, "w") as out:
+        # Write header line
+        out.write("Region\tSite\tStrand\tGene\tSSE\talpha_count\tbeta1_count\tbeta2Simple_count\tbeta2Cryptic_count\tbeta2_weighted\tPartners\tCompetitors\n")
+        # Iterate over master list with a progress bar
+        for chrom, pos, strand in tqdm(master, total=len(master), desc="Filling sample"):
+            key = (chrom, pos, strand)
+            if key in existing:
+                out.write("\t".join(existing[key]) + "\n")
+            else:
+                # Create new splice site for missing site
+                site = makeSingleSpliceSite(chrom, pos, 1, strand, isStranded)
+                # Assign default gene so getGeneName() works properly
+                site.setGene(NA_gene)
+                # Process the BAM file for this site
+                checkBam(bam, site, 0, isStranded, strandedType)
+                calculateSSE(site, isbeta2Cryptic)
+                partners = site.getPartnerCounts()
+                geneName = site.getGeneName() if site.getGeneName() is not None else "NA"
+                out.write(f"{chrom}\t{pos}\t{strand}\t{geneName}\t"
+                          f"{site.getSSE(0):.3f}\t{site.getAlphaCount(0)}\t{site.getBeta1Count(0)}\t"
+                          f"{site.getBeta2SimpleCount(0)}\t{site.getBeta2CrypticCount(0)}\t"
+                          f"{site.getBeta2WeightedCount(0):.5f}\t{partners}\t{site.getCompetitorPos()}\n")
+    bam.close()
+
+
+
+
 
 def combine(samplesFile, outputPath,qGene, isStranded, strandedType, isbeta2Cryptic):
 	print('Combining samples...')
@@ -1351,6 +1508,29 @@ if __name__ == "__main__":
 	parser_output.add_argument('-r', '--minReads', dest='minReads',required=False, nargs='?', default=10, type=int, help="The minimum number of reads giving evidence for a splice site in a given sample, below which SpliSER will report NA - default: 10")
 	parser_output.add_argument('-g', '--gene', dest='qGene', required=False, nargs='?', default='All', type=str, help="optional:Limit SpliSER to splice sites falling in a single locus")
 	parser_output.add_argument('-m', '--minSamples', dest='minSamples', required=False, nargs='?', default=50, type=int, help="optional: when using --outputType GWAS: the minimum number of samples passing the read filter for a splice site file to be written")
+
+	# ——— New “collectSites” subcommand ———
+	parser_collect = subparsers.add_parser('collectSites')
+	parser_collect.add_argument('-S','--samplesFile', dest='samplesFile', required=True,
+								help="Three‑column TSV (sample name, SpliSER.tsv, BAM) to extract all unique splice sites")
+	parser_collect.add_argument('-o','--outputPath', dest='outputPath', required=True,
+								help="Path to write master site list (TSV)")
+	
+	# ——— New “fillSample” subcommand ———
+	parser_fill = subparsers.add_parser('fillSample')
+	parser_fill.add_argument('-m','--masterSites', dest='masterPath', required=True,
+							 help="Path to master site list created by collectSites")
+	parser_fill.add_argument('-i','--inputTSV', dest='processedPath', required=True,
+							 help="This sample’s pre‑processed SpliSER.tsv")
+	parser_fill.add_argument('-B','--BAMFile', dest='bamPath', required=True,
+							 help="This sample’s filtered BAM")
+	parser_fill.add_argument('-o','--outputPath', dest='outputPath', required=True,
+							 help="Path to write this sample’s completed TSV")
+	parser_fill.add_argument('--isStranded', dest='isStranded', action='store_true', default=False)
+	parser_fill.add_argument('-s','--strandedType', dest='strandedType', default="fr", help="fr or rf")
+	parser_fill.add_argument('--beta2Cryptic', dest='isbeta2Cryptic', action='store_true', default=False)
+
+        
 	#Parse arguments
 	kwargs = vars(parser.parse_args())
 	command = kwargs.pop('command')
